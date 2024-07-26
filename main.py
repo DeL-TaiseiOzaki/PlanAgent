@@ -1,8 +1,9 @@
 import sys
 import json
 import os
+import torch
 from typing import Dict, Any
-
+from datetime import datetime
 from llm_interfaces.base_llm import BaseLLM
 from agents.plan_agent import PlanAgent
 from agents.dispatch_agent import DispatchAgent
@@ -84,7 +85,7 @@ def main(task: str, plan_llm_type: str, plan_temperature: float, plan_max_tokens
     # 4. DispatchAgentがタスク実行に必要なエージェントを宣言
     dispatch_result = dispatch_agent.dispatch(task, "例示的なシステムプロンプト", "例示的なユーザープロンプト")
 
-    # 結果を出力
+     # 結果を出力
     output = {
         "task": task,
         "llm_configs": {
@@ -98,8 +99,13 @@ def main(task: str, plan_llm_type: str, plan_temperature: float, plan_max_tokens
     }
 
     os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, "results.json"), "w", encoding="utf-8") as f:
+
+    #データの出力
+    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"results_{current_time}.json"
+    with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 12:
@@ -118,3 +124,6 @@ if __name__ == "__main__":
         dispatch_max_tokens=int(sys.argv[10]),
         output_dir=sys.argv[11]
     )
+
+    print(torch.cuda.memory_allocated())
+    print(torch.cuda.memory_reserved())

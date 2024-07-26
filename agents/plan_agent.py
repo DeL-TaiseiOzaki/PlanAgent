@@ -11,5 +11,4 @@ class PlanAgent(BaseAgent):
         return self.parse_subtasks(response)
 
     def parse_subtasks(self, response: str) -> List[str]:
-        # ここでレスポンスを解析し、サブタスクのリストを返す実装を行います
         return [line.strip() for line in response.split('\n') if line.strip()]

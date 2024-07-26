@@ -9,10 +9,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 #モデル設定
-OPENAI_MODEL = "gpt-3.5-turbo"
-ANTHROPIC_MODEL = "claude-2" 
-GROQ_MODEL = "mixtral-8x7b-32768"  
-NON_API_MODEL_PATH = "path/to/your/local/model"
+OPENAI_MODEL = "gpt-4o-mini"
+ANTHROPIC_MODEL = "claude-3-5-sonnet-20240620" 
+GROQ_MODEL = "llama3-70b-8192"  
+NON_API_MODEL_PATH = "hbx/Mistral-Interact"
 USE_VLLM = True 
 
 #LLM選択

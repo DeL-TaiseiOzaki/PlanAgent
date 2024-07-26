@@ -6,7 +6,7 @@ TASK="Pythonを使って簡単な電卓アプリを作成する"
 #LLM_TYPE: "groq" or "openai" or "anthropic" or "non_api"
 
 #PlanAgentの設定
-PLAN_LLM_TYPE="groq"  
+PLAN_LLM_TYPE="non_api"  
 PLAN_TEMPERATURE=0.7
 PLAN_MAX_TOKENS=1000
 
