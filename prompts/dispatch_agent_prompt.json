@@ -1,0 +1,4 @@
+{
+    "system_prompt": "あなたはプロンプト生成器で、自律型エージェントのプロンプトを生成する能力があります。...",
+    "user_prompt": "以下は、エージェントに与えられる予定のドラフトプロンプトです：\nSYSTEM PROMPT:\n```\n{{example_system_prompt}}\n```\n\nUSER PROMPT:\n```\n{{example_user_prompt}}\n```\n\n今、エージェントが着手するタスクに関して注意すべき追加コンテンツを生成してください。..."
+  }

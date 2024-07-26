@@ -1,0 +1,4 @@
+{
+    "system_prompt": "あなたは計画修正エージェントで、クエリの計画を反復的に修正するタスクを持っています。...",
+    "user_prompt": "あなたのタスクは、SUBTASK OPERATIONの操作の1つを選択することです。注意点：\n1.{{subtask_id}}より大きい（含まない）サブタスク_idのサブタスクのみ変更できます。\n2.既存の計画が十分良いと思われる場合は、REFINE_SUBMITを使用してください。\n3.REFINE_SUBMIT操作の前に最大{{max_step}}回の操作を行えます。すでに{{modify_steps}}ステップ実行しているので、予算に注意してください。\n4.すべての計画の最大深さは{{max_plan_tree_depth}}です。SUBTASK_SPLITを使用する際は注意してください。\n5.必ず関数呼び出しを使用して応答してください（これを忘れずに！）。\n\n--- ステータス ---\nファイルシステム構造：{{workspace_files}}\n修正ノードメッセージ：{{refine_node_message}}"
+  }

@@ -1,0 +1,7 @@
+openai
+anthropic
+groq
+transformers
+torch
+vllm
+python-dotenv
