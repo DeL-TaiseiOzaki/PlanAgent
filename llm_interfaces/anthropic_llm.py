@@ -1,18 +1,23 @@
-from anthropic import Anthropic, HUMAN_PROMPT, AI_PROMPT
+import anthropic
 from .base_llm import BaseLLM
-from config import ANTHROPIC_MODEL
 
 class AnthropicLLM(BaseLLM):
-    def __init__(self, api_key: str, temperature: float, max_tokens: int):
-        self.client = Anthropic(api_key=api_key)
+    def __init__(self, api_key: str, model: str, temperature: float, max_tokens: int):
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
 
     def generate(self, prompt: str) -> str:
-        response = self.client.completion(
-            prompt=f"{HUMAN_PROMPT} {prompt}{AI_PROMPT}",
-            model=ANTHROPIC_MODEL,
-            max_tokens_to_sample=self.max_tokens,
-            temperature=self.temperature
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
         )
-        return response.completion
+        return message.content[0].text
