@@ -11,6 +11,10 @@ from agents.refine_agent import RefineAgent
 from agents.dispatch_agent import DispatchAgent
 import config
 
+# Pinecone関連のインポートは条件付きで行う
+if config.USE_PINECONE:
+    from ui.pinecone_utils import init_vector_store, upsert_to_store, query_store
+
 def get_llm(llm_type: str, temperature: float, max_tokens: int) -> BaseLLM:
     if llm_type == "openai":
         from llm_interfaces.openai_llm import OpenAILLM
@@ -45,11 +49,21 @@ def parse_dispatch_result(dispatch_result: str) -> List[Dict[str, str]]:
     
     return agents
 
-def main(task: str, plan_llm_type: str, plan_temperature: float, plan_max_tokens: int,
+def main(task: str, 
+         detect_llm_type: str, detect_temperature: float, detect_max_tokens: int,
+         interactive_llm_type: str, interactive_temperature: float, interactive_max_tokens: int,
+         summarize_llm_type: str, summarize_temperature: float, summarize_max_tokens: int,
          refine_llm_type: str, refine_temperature: float, refine_max_tokens: int,
          dispatch_llm_type: str, dispatch_temperature: float, dispatch_max_tokens: int,
          output_dir: str) -> None:
-    plan_llm = get_llm(plan_llm_type, plan_temperature, plan_max_tokens)
+
+    # ベクトルストアの初期化（必要な場合のみ）
+    if config.USE_PINECONE:
+        vector_store = init_vector_store()
+
+    detect_llm = get_llm(detect_llm_type, detect_temperature, detect_max_tokens)
+    interactive_llm = get_llm(interactive_llm_type, interactive_temperature, interactive_max_tokens)
+    summarize_llm = get_llm(summarize_llm_type, summarize_temperature, summarize_max_tokens)
     refine_llm = get_llm(refine_llm_type, refine_temperature, refine_max_tokens)
     dispatch_llm = get_llm(dispatch_llm_type, dispatch_temperature, dispatch_max_tokens)
 
@@ -58,72 +72,83 @@ def main(task: str, plan_llm_type: str, plan_temperature: float, plan_max_tokens
         "agents": {}
     }
 
-    # 不足情報の検出
-    detect_missinfo_agent = DetectMissinfoAgent(plan_llm)
+    # DetectMissinfoAgent
+    detect_missinfo_agent = DetectMissinfoAgent(detect_llm)
+    detect_prompt = detect_missinfo_agent.system_prompt + "\n\n" + detect_missinfo_agent.user_prompt.replace("{{task}}", task)
     missing_info = detect_missinfo_agent.detect_missing_info(task)
     output["agents"]["DetectMissinfoAgent"] = {
-        "input": task,
+        "prompt": detect_prompt,
         "output": missing_info
     }
 
-    # インタラクティブな情報収集
-    interactive_agent = InteractiveAgent(plan_llm)
+    # ベクトルストアにタスクと不足情報を保存（Pinecone使用時のみ）
+    if config.USE_PINECONE:
+        task_vector = detect_llm.get_embeddings(task)
+        upsert_to_store(vector_store, [(task, task_vector, {"missing_info": missing_info})])
+
+    # InteractiveAgent
+    interactive_agent = InteractiveAgent(interactive_llm)
+    interactive_prompt = interactive_agent.system_prompt + "\n\n" + interactive_agent.user_prompt.replace("{{task}}", task).replace("{{missing_info}}", str(missing_info))
     conversation_history = interactive_agent.interactive_information_collection(task, missing_info)
     output["agents"]["InteractiveAgent"] = {
-        "input": {
-            "task": task,
-            "missing_info": missing_info
-        },
+        "prompt": interactive_prompt,
         "output": conversation_history
     }
 
-    # タスクの要約
-    summarize_task_agent = SummarizeTaskAgent(plan_llm)
+    # SummarizeTaskAgent
+    summarize_task_agent = SummarizeTaskAgent(summarize_llm)
+    summarize_prompt = summarize_task_agent.system_prompt + "\n\n" + summarize_task_agent.user_prompt.replace("{{task}}", task).replace("{{conversation_history}}", str(conversation_history))
     task_summary = summarize_task_agent.summarize_task(task, conversation_history)
     output["agents"]["SummarizeTaskAgent"] = {
-        "input": {
-            "task": task,
-            "conversation_history": conversation_history
-        },
+        "prompt": summarize_prompt,
         "output": task_summary
     }
 
-    #計画を生成・精緻化
+    # RefineAgent
     refine_agent = RefineAgent(refine_llm)
+    refine_prompt = refine_agent.system_prompt + "\n\n" + refine_agent.user_prompt.replace("{{task}}", task_summary).replace("{{max_step}}", str(config.MAX_PLAN_REFINE_CHAIN_LENGTH)).replace("{{modify_steps}}", "0").replace("{{max_plan_tree_depth}}", str(config.MAX_PLAN_TREE_DEPTH)).replace("{{summary}}", "").replace("{{conversation_history}}", "[]")
     initial_plan = refine_agent.refine_plan(
         task_summary,
         config.MAX_PLAN_REFINE_CHAIN_LENGTH,
         0,
         config.MAX_PLAN_TREE_DEPTH,
-        "",  # summaryは不要になったため空文字列を渡す
-        []   # 会話履歴を空のリストに変更
+        "",
+        []
+    )
+    
+    # ベクトルストアから関連情報を取得（Pinecone使用時のみ）
+    if config.USE_PINECONE:
+        related_info = query_store(vector_store, refine_llm.get_embeddings(task_summary))
+    else:
+        related_info = []
+
+    # 関連情報を使用して計画を改善
+    improved_plan = refine_agent.refine_plan(
+        task_summary,
+        config.MAX_PLAN_REFINE_CHAIN_LENGTH,
+        0,
+        config.MAX_PLAN_TREE_DEPTH,
+        "",
+        related_info
     )
     output["agents"]["RefineAgent"] = {
-        "input": {
-            "task_summary": task_summary,
-            "max_plan_refine_chain_length": config.MAX_PLAN_REFINE_CHAIN_LENGTH,
-            "max_plan_tree_depth": config.MAX_PLAN_TREE_DEPTH
-        },
-        "output": initial_plan
+        "prompt": refine_prompt,
+        "output": improved_plan
     }
 
-    #タスク実行に必要なエージェントを宣言
-    # DispatchAgentを使用してタスク実行に必要なエージェントを宣言
+    # DispatchAgent
     dispatch_agent = DispatchAgent(dispatch_llm)
-    dispatch_result = dispatch_agent.dispatch(task_summary, "", str(initial_plan))
+    dispatch_prompt = dispatch_agent.system_prompt + "\n\n" + dispatch_agent.user_prompt.replace("{{task}}", task_summary).replace("{{summary}}", "").replace("{{initial_plan}}", str(improved_plan))
+    dispatch_result = dispatch_agent.dispatch(task_summary, "", str(improved_plan))
     parsed_dispatch_result = parse_dispatch_result(dispatch_result)
     output["agents"]["DispatchAgent"] = {
-        "input": {
-            "task_summary": task_summary,
-            "initial_plan": initial_plan
-        },
+        "prompt": dispatch_prompt,
         "output": dispatch_result
     }
 
-    # 最終的なエージェントリストとその指示を追加
     output["final_agent_instructions"] = parsed_dispatch_result
 
-    # 結果をJSONファイルに出力
+    # Output results to JSON file
     os.makedirs(output_dir, exist_ok=True)
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"results_{current_time}.json"
@@ -133,22 +158,32 @@ def main(task: str, plan_llm_type: str, plan_temperature: float, plan_max_tokens
     print(f"\n結果が {os.path.join(output_dir, filename)} に保存されました。")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 12:
-        print("Usage: python main.py <task> <plan_llm_type> <plan_temperature> <plan_max_tokens> "
+    if len(sys.argv) != 18:
+        print("Usage: python main.py <task> "
+              "<detect_llm_type> <detect_temperature> <detect_max_tokens> "
+              "<interactive_llm_type> <interactive_temperature> <interactive_max_tokens> "
+              "<summarize_llm_type> <summarize_temperature> <summarize_max_tokens> "
               "<refine_llm_type> <refine_temperature> <refine_max_tokens> "
-              "<dispatch_llm_type> <dispatch_temperature> <dispatch_max_tokens> <output_dir>")
+              "<dispatch_llm_type> <dispatch_temperature> <dispatch_max_tokens> "
+              "<output_dir>")
         sys.exit(1)
 
     main(
         task=sys.argv[1],
-        plan_llm_type=sys.argv[2],
-        plan_temperature=float(sys.argv[3]),
-        plan_max_tokens=int(sys.argv[4]),
-        refine_llm_type=sys.argv[5],
-        refine_temperature=float(sys.argv[6]),
-        refine_max_tokens=int(sys.argv[7]),
-        dispatch_llm_type=sys.argv[8],
-        dispatch_temperature=float(sys.argv[9]),
-        dispatch_max_tokens=int(sys.argv[10]),
-        output_dir=sys.argv[11]
+        detect_llm_type=sys.argv[2],
+        detect_temperature=float(sys.argv[3]),
+        detect_max_tokens=int(sys.argv[4]),
+        interactive_llm_type=sys.argv[5],
+        interactive_temperature=float(sys.argv[6]),
+        interactive_max_tokens=int(sys.argv[7]),
+        summarize_llm_type=sys.argv[8],
+        summarize_temperature=float(sys.argv[9]),
+        summarize_max_tokens=int(sys.argv[10]),
+        refine_llm_type=sys.argv[11],
+        refine_temperature=float(sys.argv[12]),
+        refine_max_tokens=int(sys.argv[13]),
+        dispatch_llm_type=sys.argv[14],
+        dispatch_temperature=float(sys.argv[15]),
+        dispatch_max_tokens=int(sys.argv[16]),
+        output_dir=sys.argv[17]
     )

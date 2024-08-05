@@ -2,11 +2,8 @@ from .base_llm import BaseLLM
 import torch
 
 class NonAPIModels(BaseLLM):
-    def __init__(self, model_path: str, use_vllm: bool = True, temperature: float = 0.7, max_tokens: int = 1000):
-        self.model_path = model_path
+    def __init__(self, model_path: str, use_vllm: bool, temperature: float, max_tokens: int):
         self.use_vllm = use_vllm
-        self.temperature = temperature
-        self.max_tokens = max_tokens
         
         if use_vllm:
             from vllm import LLM, SamplingParams

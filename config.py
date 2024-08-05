@@ -35,3 +35,7 @@ DEFAULT_MAX_TOKENS = 1000
 
 # 出力ディレクトリ
 DEFAULT_OUTPUT_DIR = "./output"
+
+# Pinecone設定
+USE_PINECONE = False  # Pineconeを使用するかどうかのフラグ
+PINECONE_INDEX_NAME = "agent-knowledge-base"

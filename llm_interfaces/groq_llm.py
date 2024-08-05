@@ -8,10 +8,10 @@ class GroqLLM(BaseLLM):
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, messages: str) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=self.temperature,
             max_tokens=self.max_tokens
         )

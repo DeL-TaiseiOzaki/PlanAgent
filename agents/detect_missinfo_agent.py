@@ -6,7 +6,12 @@ class DetectMissinfoAgent(BaseAgent):
 
     def detect_missing_info(self, task: str) -> list[str]:
         formatted_user_prompt = self.user_prompt.replace("{{task}}", task)
-        response = self.generate(f"{self.system_prompt}\n\n{formatted_user_prompt}")
+        response = self.llm.generate(
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": formatted_user_prompt}
+            ]
+        )
         return self.parse_missing_info(response)
 
     def parse_missing_info(self, response: str) -> list[str]:

@@ -5,3 +5,5 @@ transformers
 torch
 vllm
 python-dotenv
+streamlit
+pinecone-client
