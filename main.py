@@ -10,6 +10,7 @@ from agents.persona_based_info_retrieval_agent import PersonaBasedInfoRetrievalA
 from agents.interactive_agent import InteractiveAgent
 from agents.summarize_task_agent import SummarizeTaskAgent
 from agents.decompose_task_agent import DecomposeTaskAgent
+from agents.orchestration_agent import OrchestrationAgent
 import config
 import logging
 
@@ -133,6 +134,22 @@ def main(task: str,
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     log_callback(f"結果が {os.path.join(output_dir, filename)} に保存されました。")
+
+    # OrchestrationAgentの初期化を更新
+    orchestration_llm = get_llm(config.DEFAULT_LLM_TYPE, config.DEFAULT_TEMPERATURE, config.DEFAULT_MAX_TOKENS)
+    orchestration_agent = OrchestrationAgent(orchestration_llm)
+
+    # main関数内で、DecomposeTaskAgentの後に以下を追加
+    log_callback("タスクの実行を開始...")
+    execution_results = orchestration_agent.execute_tasks(decomposed_tasks)
+    log_callback("タスクの実行が完了しました")
+    output["agents"]["OrchestrationAgent"] = {
+        "input": decomposed_tasks,
+        "output": execution_results
+    }
+
+    output["final_execution_results"] = execution_results
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 18:

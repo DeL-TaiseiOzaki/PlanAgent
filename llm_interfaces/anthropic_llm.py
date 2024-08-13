@@ -8,7 +8,11 @@ class AnthropicLLM(BaseLLM):
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    def generate(self, messages: list[dict]) -> str:
+    def generate(self, messages: list[dict] or str) -> str:
+        if isinstance(messages, str):
+            # If a single string is provided, treat it as a user message
+            messages = [{"role": "user", "content": messages}]
+
         # Extract system message and user messages
         system_message = None
         user_messages = []
@@ -19,8 +23,9 @@ class AnthropicLLM(BaseLLM):
             else:
                 user_messages.append(message)
 
+        # If no system message is provided, use a default one
         if not system_message:
-            raise ValueError("System message is required")
+            system_message = "You are a helpful AI assistant."
 
         response = self.client.messages.create(
             model=self.model,
