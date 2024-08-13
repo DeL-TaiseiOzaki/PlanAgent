@@ -8,7 +8,7 @@ class OpenAILLM(BaseLLM):
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    def generate(self, messages: str) -> str:
+    def generate(self, messages: list) -> str:
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,

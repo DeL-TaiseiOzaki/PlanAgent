@@ -1,5 +1,8 @@
 from .base_agent import BaseAgent
 import config
+from typing import List, Union
+from typing import List, Tuple
+import json
 
 class InteractiveAgent(BaseAgent):
     def __init__(self, llm):
@@ -9,64 +12,75 @@ class InteractiveAgent(BaseAgent):
         self.question_count = 0
         self.task_understood = False
 
-    def generate(self, user_input: str) -> str:
-        if self.task_understood:
-            return "タスクの理解が完了しました。これ以上の質問は必要ありません。"
+    def interactive_information_collection(self, task: str, missing_info: str, retrieved_info: str) -> Tuple[List[dict], str]:
+        self.reset()  # 新しいタスクのために状態をリセット
+        while not self.task_understood and self.question_count < self.max_questions:
+            prompt = self._generate_prompt(task, missing_info, retrieved_info)
+            response = self.generate(prompt)
+            
+            if response.upper() == "TASK_UNDERSTOOD":
+                self.task_understood = True
+                break
 
-        if self.question_count >= self.max_questions:
-            self.task_understood = True
-            return "最大質問回数に達しました。これまでに収集された情報でタスクを進めます。"
+            print(f"\n質問: {response}")
+            answer = input("あなたの回答: ")
 
+            self.conversation_history.append({"role": "assistant", "content": response})
+            self.conversation_history.append({"role": "user", "content": answer})
+            self.question_count += 1
+
+            # 各回答後に不足情報と取得済み情報を更新
+            prompt_for_update = self._generate_update_prompt(task, missing_info, retrieved_info, response, answer)
+            update_response = self.generate(prompt_for_update)
+            missing_info, retrieved_info = self._parse_update_response(update_response)
+
+        return self.conversation_history, retrieved_info
+
+    def _generate_prompt(self, task: str, missing_info: str, retrieved_info: str) -> str:
+        prompt = f"タスク: {task}\n\n"
+        prompt += f"取得済み情報:\n{retrieved_info}\n\n"
+        prompt += f"不足情報:\n{missing_info}\n\n"
+        prompt += "次の質問を生成するか、タスクの実施計画が立てられるレベルの情報が得られたと判断した場合は'TASK_UNDERSTOOD'と応答してください。"
+        return prompt
+
+    def _generate_update_prompt(self, task: str, missing_info: str, retrieved_info: str, last_question: str, last_answer: str) -> str:
+        prompt = f"タスク: {task}\n\n"
+        prompt += f"現在の取得済み情報:\n{retrieved_info}\n\n"
+        prompt += f"現在の不足情報:\n{missing_info}\n\n"
+        prompt += f"直前の質問: {last_question}\n"
+        prompt += f"ユーザーの回答: {last_answer}\n\n"
+        prompt += "上記の情報を基に、取得済み情報と不足情報を更新してください。"
+        prompt += "更新後の情報を以下のフォーマットで出力してください：\n"
+        prompt += "取得済み情報:\n(更新された取得済み情報を文章形式で)\n"
+        prompt += "不足情報:\n(更新された不足情報を文章形式で)\n"
+        return prompt
+
+    def _parse_update_response(self, response: str) -> Tuple[str, str]:
+        lines = response.split('\n')
+        retrieved_info = ""
+        missing_info = ""
+        current_section = None
+
+        for line in lines:
+            if line.strip() == "取得済み情報:":
+                current_section = "retrieved"
+            elif line.strip() == "不足情報:":
+                current_section = "missing"
+            elif current_section == "retrieved":
+                retrieved_info += line + "\n"
+            elif current_section == "missing":
+                missing_info += line + "\n"
+
+        return missing_info.strip(), retrieved_info.strip()
+
+    def generate(self, prompt: str) -> str:
         messages = [
             {"role": "system", "content": self.system_prompt},
-            *self.conversation_history,
-            {"role": "user", "content": user_input}
+            {"role": "user", "content": prompt}
         ]
-        
-        response = self.llm.generate(messages)
-        
-        self.conversation_history.append({"role": "user", "content": user_input})
-        self.conversation_history.append({"role": "assistant", "content": response})
-        
-        self.question_count += 1
-        
-        if response.upper() == "TASK_UNDERSTOOD":
-            self.task_understood = True
-            return "タスクの理解が完了しました。これ以上の質問は必要ありません。"
-        
-        return response
+        return self.llm.generate(messages)
 
     def reset(self):
         self.conversation_history = []
         self.question_count = 0
         self.task_understood = False
-
-    def interactive_information_collection(self, task: str, missing_info: list[str]) -> list[dict]:
-        self.reset()  # 新しいタスクのために状態をリセット
-        print(f"タスク: {task}")
-        print("タスクを完了するために必要な情報を収集します。")
-
-        while not self.task_understood and self.question_count < self.max_questions:
-            prompt = f"タスク: {task}\n\n不足情報:\n"
-            for info in missing_info:
-                prompt += f"- {info}\n"
-            prompt += "\n次の質問を生成するか、タスクの実施計画が立てられるレベルの情報が得られたと判断した場合は'TASK_UNDERSTOOD'と応答してください。"
-
-            question = self.generate(prompt)
-            
-            if self.task_understood:
-                print("\n十分な情報が収集されました。タスクの理解が完了しました。")
-                break
-
-            print(f"\n質問: {question}")
-            answer = input("あなたの回答: ")
-            
-            if answer.upper() == "TASK_UNDERSTOOD":
-                self.task_understood = True
-                print("\n十分な情報が収集されました。タスクの理解が完了しました。")
-                break
-
-        if self.question_count >= self.max_questions:
-            print("\n最大質問回数に達しました。収集された情報でタスクを進めます。")
-
-        return self.conversation_history

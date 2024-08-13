@@ -1,19 +1,17 @@
 import sys
 import json
 import os
+import logging
 from datetime import datetime
-from typing import List, Dict
+from typing import Dict, Any, Callable
 from llm_interfaces.base_llm import BaseLLM
 from agents.detect_missinfo_agent import DetectMissinfoAgent
+from agents.persona_based_info_retrieval_agent import PersonaBasedInfoRetrievalAgent
 from agents.interactive_agent import InteractiveAgent
 from agents.summarize_task_agent import SummarizeTaskAgent
-from agents.refine_agent import RefineAgent
-from agents.dispatch_agent import DispatchAgent
+from agents.decompose_task_agent import DecomposeTaskAgent
 import config
-
-# Pinecone関連のインポートは条件付きで行う
-if config.USE_PINECONE:
-    from ui.pinecone_utils import init_vector_store, upsert_to_store, query_store
+import logging
 
 def get_llm(llm_type: str, temperature: float, max_tokens: int) -> BaseLLM:
     if llm_type == "openai":
@@ -31,41 +29,32 @@ def get_llm(llm_type: str, temperature: float, max_tokens: int) -> BaseLLM:
     else:
         raise ValueError(f"Unsupported LLM type: {llm_type}")
 
-def parse_dispatch_result(dispatch_result: str) -> List[Dict[str, str]]:
-    agents = []
-    lines = dispatch_result.strip().split("\n")
-    current_agent = {}
-    
-    for line in lines:
-        if line.startswith("エージェント"):
-            if current_agent:
-                agents.append(current_agent)
-            current_agent = {"name": line.split(":")[1].strip()}
-        elif line.startswith("指示:"):
-            current_agent["instruction"] = line.split(":", 1)[1].strip()
-    
-    if current_agent:
-        agents.append(current_agent)
-    
-    return agents
-
 def main(task: str, 
          detect_llm_type: str, detect_temperature: float, detect_max_tokens: int,
+         persona_llm_type: str, persona_temperature: float, persona_max_tokens: int,
          interactive_llm_type: str, interactive_temperature: float, interactive_max_tokens: int,
          summarize_llm_type: str, summarize_temperature: float, summarize_max_tokens: int,
-         refine_llm_type: str, refine_temperature: float, refine_max_tokens: int,
-         dispatch_llm_type: str, dispatch_temperature: float, dispatch_max_tokens: int,
-         output_dir: str) -> None:
+         decompose_llm_type: str, decompose_temperature: float, decompose_max_tokens: int,
+         output_dir: str,
+         log_callback: Callable[[str], None] = print) -> None:
 
-    # ベクトルストアの初期化（必要な場合のみ）
-    if config.USE_PINECONE:
-        vector_store = init_vector_store()
+    logger = logging.getLogger("AgentSystemLogger")
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logger.addHandler(handler)
 
+    def log_callback(message):
+        logger.info(message)
+
+    log_callback("エージェントシステムを初期化中...")
+
+    log_callback("LLMを初期化中...")
     detect_llm = get_llm(detect_llm_type, detect_temperature, detect_max_tokens)
+    persona_llm = get_llm(persona_llm_type, persona_temperature, persona_max_tokens)
     interactive_llm = get_llm(interactive_llm_type, interactive_temperature, interactive_max_tokens)
     summarize_llm = get_llm(summarize_llm_type, summarize_temperature, summarize_max_tokens)
-    refine_llm = get_llm(refine_llm_type, refine_temperature, refine_max_tokens)
-    dispatch_llm = get_llm(dispatch_llm_type, dispatch_temperature, dispatch_max_tokens)
+    decompose_llm = get_llm(decompose_llm_type, decompose_temperature, decompose_max_tokens)
 
     output = {
         "task": task,
@@ -73,98 +62,86 @@ def main(task: str,
     }
 
     # DetectMissinfoAgent
+    log_callback("不足情報の検出を開始...")
     detect_missinfo_agent = DetectMissinfoAgent(detect_llm)
-    detect_prompt = detect_missinfo_agent.system_prompt + "\n\n" + detect_missinfo_agent.user_prompt.replace("{{task}}", task)
     missing_info = detect_missinfo_agent.detect_missing_info(task)
+    log_callback(f"検出された不足情報: {missing_info}")
     output["agents"]["DetectMissinfoAgent"] = {
-        "prompt": detect_prompt,
+        "input": task,
         "output": missing_info
     }
 
-    # ベクトルストアにタスクと不足情報を保存（Pinecone使用時のみ）
-    if config.USE_PINECONE:
-        task_vector = detect_llm.get_embeddings(task)
-        upsert_to_store(vector_store, [(task, task_vector, {"missing_info": missing_info})])
+    # PersonaBasedInfoRetrievalAgent
+    log_callback("ペルソナベースの情報検索を開始...")
+    persona_agent = PersonaBasedInfoRetrievalAgent(persona_llm)
+    retrieved_info = persona_agent.retrieve_info(missing_info)
+    log_callback("ペルソナベースの情報検索が完了しました")
+    output["agents"]["PersonaBasedInfoRetrievalAgent"] = {
+        "input": missing_info,
+        "output": retrieved_info
+    }
 
     # InteractiveAgent
+    log_callback("対話的情報収集を開始...")
     interactive_agent = InteractiveAgent(interactive_llm)
-    interactive_prompt = interactive_agent.system_prompt + "\n\n" + interactive_agent.user_prompt.replace("{{task}}", task).replace("{{missing_info}}", str(missing_info))
-    conversation_history = interactive_agent.interactive_information_collection(task, missing_info)
+    conversation_history, updated_retrieved_info = interactive_agent.interactive_information_collection(task, missing_info, retrieved_info)
+    log_callback("対話的情報収集が完了しました")
     output["agents"]["InteractiveAgent"] = {
-        "prompt": interactive_prompt,
-        "output": conversation_history
+        "input": {
+            "task": task,
+            "missing_info": missing_info,
+            "retrieved_info": retrieved_info
+        },
+        "output": {
+            "conversation_history": conversation_history,
+            "updated_retrieved_info": updated_retrieved_info
+        }
     }
 
     # SummarizeTaskAgent
+    log_callback("タスクの具体化を開始...")
     summarize_task_agent = SummarizeTaskAgent(summarize_llm)
-    summarize_prompt = summarize_task_agent.system_prompt + "\n\n" + summarize_task_agent.user_prompt.replace("{{task}}", task).replace("{{conversation_history}}", str(conversation_history))
-    task_summary = summarize_task_agent.summarize_task(task, conversation_history)
+    concrete_task = summarize_task_agent.summarize_task(task, updated_retrieved_info, conversation_history)
+    log_callback("タスクの具体化が完了しました")
     output["agents"]["SummarizeTaskAgent"] = {
-        "prompt": summarize_prompt,
-        "output": task_summary
+        "input": {
+            "task": task,
+            "retrieved_info": updated_retrieved_info,
+            "conversation_history": conversation_history
+        },
+        "output": concrete_task
     }
 
-    # RefineAgent
-    refine_agent = RefineAgent(refine_llm)
-    refine_prompt = refine_agent.system_prompt + "\n\n" + refine_agent.user_prompt.replace("{{task}}", task_summary).replace("{{max_step}}", str(config.MAX_PLAN_REFINE_CHAIN_LENGTH)).replace("{{modify_steps}}", "0").replace("{{max_plan_tree_depth}}", str(config.MAX_PLAN_TREE_DEPTH)).replace("{{summary}}", "").replace("{{conversation_history}}", "[]")
-    initial_plan = refine_agent.refine_plan(
-        task_summary,
-        config.MAX_PLAN_REFINE_CHAIN_LENGTH,
-        0,
-        config.MAX_PLAN_TREE_DEPTH,
-        "",
-        []
-    )
-    
-    # ベクトルストアから関連情報を取得（Pinecone使用時のみ）
-    if config.USE_PINECONE:
-        related_info = query_store(vector_store, refine_llm.get_embeddings(task_summary))
-    else:
-        related_info = []
-
-    # 関連情報を使用して計画を改善
-    improved_plan = refine_agent.refine_plan(
-        task_summary,
-        config.MAX_PLAN_REFINE_CHAIN_LENGTH,
-        0,
-        config.MAX_PLAN_TREE_DEPTH,
-        "",
-        related_info
-    )
-    output["agents"]["RefineAgent"] = {
-        "prompt": refine_prompt,
-        "output": improved_plan
+    # DecomposeTaskAgent
+    log_callback("タスクの分解を開始...")
+    decompose_agent = DecomposeTaskAgent(decompose_llm)
+    decomposed_tasks = decompose_agent.decompose_task(concrete_task)
+    log_callback("タスクの分解が完了しました")
+    output["agents"]["DecomposeTaskAgent"] = {
+        "input": concrete_task,
+        "output": decomposed_tasks
     }
 
-    # DispatchAgent
-    dispatch_agent = DispatchAgent(dispatch_llm)
-    dispatch_prompt = dispatch_agent.system_prompt + "\n\n" + dispatch_agent.user_prompt.replace("{{task}}", task_summary).replace("{{summary}}", "").replace("{{initial_plan}}", str(improved_plan))
-    dispatch_result = dispatch_agent.dispatch(task_summary, "", str(improved_plan))
-    parsed_dispatch_result = parse_dispatch_result(dispatch_result)
-    output["agents"]["DispatchAgent"] = {
-        "prompt": dispatch_prompt,
-        "output": dispatch_result
-    }
-
-    output["final_agent_instructions"] = parsed_dispatch_result
+    output["final_decomposed_tasks"] = decomposed_tasks
 
     # Output results to JSON file
+    log_callback("結果をJSONファイルに保存中...")
     os.makedirs(output_dir, exist_ok=True)
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"results_{current_time}.json"
     with open(os.path.join(output_dir, filename), "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
-    print(f"\n結果が {os.path.join(output_dir, filename)} に保存されました。")
+    log_callback(f"結果が {os.path.join(output_dir, filename)} に保存されました。")
 
 if __name__ == "__main__":
     if len(sys.argv) != 18:
         print("Usage: python main.py <task> "
               "<detect_llm_type> <detect_temperature> <detect_max_tokens> "
+              "<persona_llm_type> <persona_temperature> <persona_max_tokens> "
               "<interactive_llm_type> <interactive_temperature> <interactive_max_tokens> "
               "<summarize_llm_type> <summarize_temperature> <summarize_max_tokens> "
-              "<refine_llm_type> <refine_temperature> <refine_max_tokens> "
-              "<dispatch_llm_type> <dispatch_temperature> <dispatch_max_tokens> "
+              "<decompose_llm_type> <decompose_temperature> <decompose_max_tokens> "
               "<output_dir>")
         sys.exit(1)
 
@@ -173,17 +150,17 @@ if __name__ == "__main__":
         detect_llm_type=sys.argv[2],
         detect_temperature=float(sys.argv[3]),
         detect_max_tokens=int(sys.argv[4]),
-        interactive_llm_type=sys.argv[5],
-        interactive_temperature=float(sys.argv[6]),
-        interactive_max_tokens=int(sys.argv[7]),
-        summarize_llm_type=sys.argv[8],
-        summarize_temperature=float(sys.argv[9]),
-        summarize_max_tokens=int(sys.argv[10]),
-        refine_llm_type=sys.argv[11],
-        refine_temperature=float(sys.argv[12]),
-        refine_max_tokens=int(sys.argv[13]),
-        dispatch_llm_type=sys.argv[14],
-        dispatch_temperature=float(sys.argv[15]),
-        dispatch_max_tokens=int(sys.argv[16]),
+        persona_llm_type=sys.argv[5],
+        persona_temperature=float(sys.argv[6]),
+        persona_max_tokens=int(sys.argv[7]),
+        interactive_llm_type=sys.argv[8],
+        interactive_temperature=float(sys.argv[9]),
+        interactive_max_tokens=int(sys.argv[10]),
+        summarize_llm_type=sys.argv[11],
+        summarize_temperature=float(sys.argv[12]),
+        summarize_max_tokens=int(sys.argv[13]),
+        decompose_llm_type=sys.argv[14],
+        decompose_temperature=float(sys.argv[15]),
+        decompose_max_tokens=int(sys.argv[16]),
         output_dir=sys.argv[17]
     )

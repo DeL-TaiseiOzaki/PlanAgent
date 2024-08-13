@@ -36,6 +36,12 @@ DEFAULT_MAX_TOKENS = 1000
 # 出力ディレクトリ
 DEFAULT_OUTPUT_DIR = "./output"
 
+#personaファイル
+PERSONA_FILE_PATH = "./persona/persona.json"
+
 # Pinecone設定
 USE_PINECONE = False  # Pineconeを使用するかどうかのフラグ
 PINECONE_INDEX_NAME = "agent-knowledge-base"
+
+# ユーザーID設定
+CURRENT_USER_ID = 1  # 現在のユーザーID（1-5の範囲で設定）

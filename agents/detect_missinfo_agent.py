@@ -15,4 +15,4 @@ class DetectMissinfoAgent(BaseAgent):
         return self.parse_missing_info(response)
 
     def parse_missing_info(self, response: str) -> list[str]:
-        return [line.strip() for line in response.split('\n') if line.strip()]
+        return response
